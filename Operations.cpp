@@ -149,118 +149,54 @@ vector<vector<double>> sumMatrixColumns(const vector<vector<double>>& matrix) {
     return columnSums;
 }
 
+// Helper function to generate Chebyshev nodes
+vector<double> chebyshev_nodes(int n) {
+    vector<double> nodes(n);
+    for (int k = 0; k < n; ++k) {
+        nodes[k] = cos((2.0 * k + 1) / (2.0 * n) * M_PI);
+    }
+    return nodes;
+}
+
+// Helper function to compute Chebyshev coefficients
+vector<double> compute_chebyshev_coefficients(int degree, const vector<double>& nodes, function<double(double)> func, double a, double b) {
+    int n = nodes.size();
+    vector<double> f_values(n);
+    for (int i = 0; i < n; ++i) {
+        double x_mapped = 0.5 * (nodes[i] * (b - a) + (a + b));
+        f_values[i] = func(x_mapped);
+    }
+
+    vector<double> coefficients(degree + 1, 0.0);
+    for (int k = 0; k <= degree; ++k) {
+        double sum = 0.0;
+        for (int j = 0; j < n; ++j) {
+            sum += f_values[j] * cos(k * acos(nodes[j]));
+        }
+        coefficients[k] = (2.0 / n) * sum;
+    }
+    coefficients[0] /= 2.0;
+    return coefficients;
+}
+
+// Generate Chebyshev coefficients for the sigmoid function
 vector<double> generate_chebyshev_coefficients_sigmoid(int degree, double a, double b) {
-    vector<double> coefficients(degree + 1);
-    for (int k = 0; k <= degree; ++k) {
-        double sum = 0.0;
-        for (int n = 0; n <= degree; ++n) {
-            double x = cos(M_PI * (n + 0.5) / (degree + 1));
-            double fx = 1 / (1 + exp(-x * (b - a) / 2 - (b + a) / 2));
-            sum += fx * cos(M_PI * k * (n + 0.5) / (degree + 1));
-        }
-        coefficients[k] = (2.0 / (degree + 1)) * sum;
-    }
-    return coefficients;
-}
-
-vector<double> generate_chebyshev_coefficients_sigmoid_derivative(int degree, double a, double b) {
-    vector<double> coefficients(degree + 1);
-    for (int k = 0; k <= degree; ++k) {
-        double sum = 0.0;
-        for (int n = 0; n <= degree; ++n) {
-            double x = cos(M_PI * (n + 0.5) / (degree + 1));
-            double fx = 1 / (1 + exp(-x * (b - a) / 2 - (b + a) / 2));
-            double fx_derivative = fx * (1 - fx);
-            sum += fx_derivative * cos(M_PI * k * (n + 0.5) / (degree + 1));
-        }
-        coefficients[k] = (2.0 / (degree + 1)) * sum;
-    }
-    return coefficients;
-}
-
-vector<vector<double>> chebyshev_sigmoid_approx(const vector<vector<double>>& inputs, const vector<double>& coefficients, double a, double b) {
-    int degree = coefficients.size() - 1;
-    vector<vector<double>> outputs(inputs.size(), vector<double>(inputs[0].size(), 0.0));
-
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        for (size_t j = 0; j < inputs[0].size(); ++j) {
-            double x = inputs[i][j];
-            double t = (2 * x - a - b) / (b - a); // Map x to [-1, 1]
-            double y = coefficients[degree];
-            for (int k = degree - 1; k >= 0; --k) {
-                y = y * t + coefficients[k];
-            }
-            outputs[i][j] = y;
-        }
-    }
-
-    return outputs;
-}
-
-vector<vector<double>> chebyshev_sigmoid_derivative_approx(const vector<vector<double>>& inputs, const vector<double>& coefficients, double a, double b) {
-    int degree = coefficients.size() - 1;
-    vector<vector<double>> outputs(inputs.size(), vector<double>(inputs[0].size(), 0.0));
-
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        for (size_t j = 0; j < inputs[0].size(); ++j) {
-            double x = inputs[i][j];
-            double t = (2 * x - a - b) / (b - a); // Map x to [-1, 1]
-            double y = coefficients[degree];
-            for (int k = degree - 1; k >= 0; --k) {
-                y = y * t + coefficients[k];
-            }
-            outputs[i][j] = y;
-        }
-    }
-
-    return outputs;
-}
-
-vector<double> generate_chebyshev_coefficients(int degree, double a, double b) {
-    // Helper function to generate Chebyshev nodes
-    auto chebyshev_nodes = [](int n) {
-        vector<double> nodes(n);
-        for (int k = 0; k < n; ++k) {
-            nodes[k] = cos((2.0 * k + 1) / (2.0 * n) * M_PI);
-        }
-        return nodes;
-    };
-
-    // Helper function to compute Chebyshev coefficients for the ReLU function
-    auto compute_coefficients = [&](int degree, const vector<double>& nodes, double a, double b) {
-        int n = nodes.size();
-        vector<double> f_values(n);
-        for (int i = 0; i < n; ++i) {
-            double x_mapped = 0.5 * (nodes[i] * (b - a) + (a + b));
-            f_values[i] = max(0.0, x_mapped);
-        }
-
-        vector<double> coefficients(degree + 1, 0.0);
-        for (int k = 0; k <= degree; ++k) {
-            double sum = 0.0;
-            for (int j = 0; j < n; ++j) {
-                sum += f_values[j] * cos(k * acos(nodes[j]));
-            }
-            coefficients[k] = (2.0 / n) * sum;
-        }
-        coefficients[0] /= 2.0;
-        return coefficients;
-    };
-
-    // Generate Chebyshev nodes
+    auto sigmoid = [](double x) { return 1 / (1 + exp(-x)); };
     vector<double> nodes = chebyshev_nodes(degree + 1);
-
-    // Compute and return Chebyshev coefficients
-    return compute_coefficients(degree, nodes, a, b);
+    return compute_chebyshev_coefficients(degree, nodes, sigmoid, a, b);
 }
 
-double chebyshev_relu(double x, const vector<double>& coefficients, double a, double b) {
+// Generate Chebyshev coefficients for the ReLU function
+vector<double> generate_chebyshev_coefficients_relu(int degree, double a, double b) {
+    auto relu = [](double x) { return max(0.0, x); };
+    vector<double> nodes = chebyshev_nodes(degree + 1);
+    return compute_chebyshev_coefficients(degree, nodes, relu, a, b);
+}
+
+// Helper function to apply Chebyshev approximation
+double chebyshev_approx(double x, const vector<double>& coefficients, double a, double b) {
     int degree = coefficients.size() - 1;
-
-    // Map input x from [a, b] to [-1, 1]
     double x_mapped = (2.0 * (x - a) / (b - a)) - 1.0;
-
-    // Evaluate Chebyshev polynomial at x
     double sum = coefficients[0];
     double T_prev = 1.0;
     double T_curr = x_mapped;
@@ -275,14 +211,26 @@ double chebyshev_relu(double x, const vector<double>& coefficients, double a, do
     return sum;
 }
 
-vector<vector<double>> apply_chebyshev_relu(const vector<vector<double>>& matrix, const vector<double>& coefficients, double a, double b) {
+// Helper function to apply Chebyshev approximation to a matrix
+vector<vector<double>> apply_chebyshev_approx(const vector<vector<double>>& matrix, const vector<double>& coefficients, double a, double b) {
     vector<vector<double>> result(matrix.size(), vector<double>(matrix[0].size()));
 
     for (size_t i = 0; i < matrix.size(); ++i) {
         for (size_t j = 0; j < matrix[i].size(); ++j) {
-            result[i][j] = chebyshev_relu(matrix[i][j], coefficients, a, b);
+            result[i][j] = chebyshev_approx(matrix[i][j], coefficients, a, b);
         }
     }
 
     return result;
 }
+
+// Apply Chebyshev approximation for the sigmoid function
+vector<vector<double>> chebyshev_sigmoid_approx(const vector<vector<double>>& inputs, const vector<double>& coefficients, double a, double b) {
+    return apply_chebyshev_approx(inputs, coefficients, a, b);
+}
+
+// Apply Chebyshev approximation for the ReLU function
+vector<vector<double>> apply_chebyshev_relu(const vector<vector<double>>& matrix, const vector<double>& coefficients, double a, double b) {
+    return apply_chebyshev_approx(matrix, coefficients, a, b);
+}
+

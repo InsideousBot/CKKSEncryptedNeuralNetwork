@@ -7,6 +7,8 @@
 #include "MNISTReader.h"
 #include <chrono>
 #include <filesystem>
+#include <thread>
+#include <mutex>
 
 using namespace std;
 using namespace chrono;
@@ -35,6 +37,11 @@ vector<vector<double>> forward_sigmoid(const vector<vector<double>>& inputs,
                                           const vector<double>& chebyshev_coefficients, double chebyshev_a, double chebyshev_b) {
     vector<vector<double>> outputs = chebyshev_sigmoid_approx(inputs, chebyshev_coefficients, chebyshev_a, chebyshev_b);
     return outputs;
+}
+
+vector<vector<double>> forward_relu(const vector<vector<double>>& inputs,
+                                    const vector<double>& chebyshev_coefficients, double chebyshev_a, double chebyshev_b) {
+    return apply_chebyshev_relu(inputs, chebyshev_coefficients, chebyshev_a, chebyshev_b);
 }
 
 vector<vector<double>> forward_output_layer(const vector<vector<double>>& inputs,
@@ -93,16 +100,14 @@ vector<vector<double>> backward_layer(const vector<vector<double>>& dvalues,
     return dinputs;
 }
 
-
-
 vector<vector<double>> backward_sigmoid(const vector<vector<double>>& dvalues, const vector<vector<double>>& inputs,
-                                        const vector<double>& chebyshev_coefficients_derivative, double chebyshev_a, double chebyshev_b) {
-    vector<vector<double>> sigmoid_derivative = chebyshev_sigmoid_derivative_approx(inputs, chebyshev_coefficients_derivative, chebyshev_a, chebyshev_b);
+                                        const vector<double>& chebyshev_coefficients, double chebyshev_a, double chebyshev_b) {
+    vector<vector<double>> sigmoid_approx = chebyshev_sigmoid_approx(inputs, chebyshev_coefficients, chebyshev_a, chebyshev_b);
     vector<vector<double>> dinputs(dvalues.size(), vector<double>(dvalues[0].size(), 0.0));
 
     for (size_t i = 0; i < dinputs.size(); ++i) {
         for (size_t j = 0; j < dinputs[0].size(); ++j) {
-            dinputs[i][j] = dvalues[i][j] * sigmoid_derivative[i][j];
+            dinputs[i][j] = dvalues[i][j] * sigmoid_approx[i][j];
         }
     }
     return dinputs;
@@ -133,16 +138,16 @@ void update_params(vector<vector<double>>& weights, vector<vector<double>>& dwei
 
 pair<double, double> test(const vector<vector<double>>& weights1, const vector<vector<double>>& bias1,
                           const vector<vector<double>>& weights2, const vector<vector<double>>& bias2,
-                          const vector<double>& chebyshev_coefficients, double chebyshev_a, double chebyshev_b,
+                          const vector<double>& chebyshev_relu_coefficients, double chebyshev_a, double chebyshev_b,
                           const vector<vector<double>>& testImages, const vector<int>& testLabels) {
     // Forward pass through the hidden layer
     vector<vector<double>> hidden_layer_outputs = forward_hidden_layer(testImages, weights1, bias1);
 
     // Apply the sigmoid activation function
-    vector<vector<double>> sigmoid_outputs = forward_sigmoid(hidden_layer_outputs, chebyshev_coefficients, chebyshev_a, chebyshev_b);
+    vector<vector<double>> relu_outputs = forward_relu(hidden_layer_outputs, chebyshev_relu_coefficients, chebyshev_a, chebyshev_b);
 
     // Forward pass through the output layer
-    vector<vector<double>> output_layer_outputs = forward_output_layer(sigmoid_outputs, weights2, bias2);
+    vector<vector<double>> output_layer_outputs = forward_output_layer(relu_outputs, weights2, bias2);
 
     // Apply the softmax function
     vector<vector<double>> softmax_outputs = forward_softmax(output_layer_outputs);
@@ -157,27 +162,37 @@ pair<double, double> test(const vector<vector<double>>& weights1, const vector<v
     return make_pair(test_loss, test_accuracy);
 }
 
-vector<vector<double>> train(int batch_size, int epochs,
-                             vector<vector<double>>& trainImages, vector<int>& trainLabels, // Added trainImages and trainLabels as parameters
-                             vector<vector<double>>& testImages, vector<int>& testLabels,  // Added testImages and testLabels as parameters
-                             int input_length, int neurons, int num_outputs,
-                             const vector<double>& chebyshev_coefficients, const vector<double>& chebyshev_derivative_coefficients,
-                             double chebyshev_a, double chebyshev_b,
-                             double learning_rate = 0.001) {
+struct NetworkParameters {
+    vector<vector<double>> weights1;
+    vector<vector<double>> bias1;
+    vector<vector<double>> weights2;
+    vector<vector<double>> bias2;
+};
+
+mutex file_mutex;
+mutex console_mutex;
+
+NetworkParameters train(int batch_size, int epochs,
+                        vector<vector<double>>& trainImages, vector<int>& trainLabels,
+                        vector<vector<double>>& testImages, vector<int>& testLabels,
+                        int input_length, int neurons, int num_outputs,
+                        const vector<double>& chebyshev_relu_coefficients, const vector<double>& chebyshev_sigmoid_coefficients,
+                        double chebyshev_a, double chebyshev_b,
+                        double learning_rate,
+                        double& final_test_loss, double& final_test_accuracy) {
     int numberOfImages = trainImages.size();
     cout << "Loop starting" << endl;
 
+    // Initializing Weights and Biases
+    vector<vector<double>> weights1 = generateRandomMatrix(input_length, neurons, 0.0, 1.0);
+    vector<vector<double>> bias1 = generateZeroMatrix(1, neurons);
+    vector<vector<double>> weights2 = generateRandomMatrix(neurons, num_outputs, 0.0, 1.0);
+    vector<vector<double>> bias2 = generateZeroMatrix(1, num_outputs);
+
     // Training loop
     for (int epoch = 0; epoch < epochs; ++epoch) {
-        // Reinitialize weights and biases at the start of each epoch
-        vector<vector<double>> weights1 = generateRandomMatrix(input_length, neurons, 0.0, 1.0);
-        vector<vector<double>> bias1 = generateZeroMatrix(1, neurons);
-        vector<vector<double>> weights2 = generateRandomMatrix(neurons, num_outputs, 0.0, 1.0);
-        vector<vector<double>> bias2 = generateZeroMatrix(1, num_outputs);
-
         double epoch_loss = 0.0;
         double epoch_accuracy = 0.0;
-        cout << "Epoch: " << epoch << endl;
         for (int i = 0; i < numberOfImages; i += batch_size) {
             // Prepare batch
             vector<vector<double>> inputs(trainImages.begin() + i, trainImages.begin() + min(i + batch_size, numberOfImages));
@@ -185,8 +200,8 @@ vector<vector<double>> train(int batch_size, int epochs,
 
             // Forward pass
             vector<vector<double>> hidden_layer_outputs = forward_hidden_layer(inputs, weights1, bias1);
-            vector<vector<double>> sigmoid_outputs = forward_sigmoid(hidden_layer_outputs, chebyshev_coefficients, chebyshev_a, chebyshev_b);
-            vector<vector<double>> output_layer_outputs = forward_output_layer(sigmoid_outputs, weights2, bias2);
+            vector<vector<double>> relu_outputs = forward_relu(hidden_layer_outputs, chebyshev_relu_coefficients, chebyshev_a, chebyshev_b);
+            vector<vector<double>> output_layer_outputs = forward_output_layer(relu_outputs, weights2, bias2);
             vector<vector<double>> softmax_outputs = forward_softmax(output_layer_outputs);
 
             // Calculate loss
@@ -201,9 +216,9 @@ vector<vector<double>> train(int batch_size, int epochs,
             vector<vector<double>> dSoftmaxCrossEntropyInputs = backward_softmax_cross_entropy(softmax_outputs, batch_labels);
             vector<vector<double>> dweights2(weights2.size(), vector<double>(weights2[0].size(), 0.0));
             vector<vector<double>> dbiases2(1, vector<double>(bias2[0].size(), 0.0));
-            vector<vector<double>> dinputs2 = backward_layer(dSoftmaxCrossEntropyInputs, sigmoid_outputs, weights2, dweights2, dbiases2);
+            vector<vector<double>> dinputs2 = backward_layer(dSoftmaxCrossEntropyInputs, relu_outputs, weights2, dweights2, dbiases2);
 
-            vector<vector<double>> dSigmoidInputs = backward_sigmoid(dinputs2, hidden_layer_outputs, chebyshev_derivative_coefficients, chebyshev_a, chebyshev_b);
+            vector<vector<double>> dSigmoidInputs = backward_sigmoid(dinputs2, hidden_layer_outputs, chebyshev_sigmoid_coefficients, chebyshev_a, chebyshev_b);
 
             vector<vector<double>> dweights1(weights1.size(), vector<double>(weights1[0].size(), 0.0));
             vector<vector<double>> dbiases1(1, vector<double>(bias1[0].size(), 0.0));
@@ -214,107 +229,140 @@ vector<vector<double>> train(int batch_size, int epochs,
         }
         epoch_loss /= (numberOfImages / batch_size);
         epoch_accuracy /= (numberOfImages / batch_size);
-        cout << "Epoch: " << epoch << ", Loss: " << epoch_loss << ", Accuracy: " << epoch_accuracy << endl;
 
         // Test the model
-        double test_loss, test_accuracy;
-        tie(test_loss, test_accuracy) = test(weights1, bias1, weights2, bias2, chebyshev_coefficients, chebyshev_a, chebyshev_b, testImages, testLabels);
-        cout << "Test Loss: " << test_loss << ", Test Accuracy: " << test_accuracy << endl;
+        tie(final_test_loss, final_test_accuracy) = test(weights1, bias1, weights2, bias2, chebyshev_relu_coefficients, chebyshev_a, chebyshev_b, testImages, testLabels);
     }
-    return {};
+    return {weights1, bias1, weights2, bias2};
+}
+
+void train_and_save(int n, int batch_size, int epochs,
+                    vector<vector<double>>& trainImages, vector<int>& trainLabels,
+                    vector<vector<double>>& testImages, vector<int>& testLabels,
+                    int input_length, int neurons, int num_outputs,
+                    const vector<double>& chebyshev_relu_coefficients, const vector<double>& chebyshev_sigmoid_coefficients,
+                    double chebyshev_a, double chebyshev_b,
+                    double learning_rate, int num_networks) {
+    string filename = "training_results_" + to_string(n + 1) + ".txt";
+    ofstream results_file(filename);
+    if (!results_file.is_open()) {
+        cerr << "Unable to open file for writing: " << filename << endl;
+        return;
+    }
+
+    {
+        lock_guard<mutex> guard(console_mutex);
+        cout << "Training network " << n + 1 << " of " << num_networks << endl;
+    }
+
+    {
+        lock_guard<mutex> guard(console_mutex);
+        cout << "Loop starting for network " << n + 1 << endl;
+    }
+
+    auto start_time = high_resolution_clock::now();
+
+    // Train the network
+    double final_loss;
+    double final_accuracy;
+    NetworkParameters params = train(batch_size, epochs, trainImages, trainLabels, testImages, testLabels,
+                                     input_length, neurons, num_outputs, chebyshev_relu_coefficients, chebyshev_sigmoid_coefficients,
+                                     chebyshev_a, chebyshev_b, learning_rate, final_loss, final_accuracy);
+
+    auto end_time = high_resolution_clock::now();
+    auto duration = duration_cast<seconds>(end_time - start_time).count();
+
+    // Write the results to the file
+    results_file << "Training network " << n + 1 << " of " << num_networks << "\n";
+    results_file << "Training Time: " << duration << " seconds\n";
+    results_file << "Epochs: " << epochs << "\n";
+    results_file << "Batch Size: " << batch_size << "\n";
+    results_file << "Learning Rate: " << learning_rate << "\n";
+    results_file << "Final Test Loss: " << final_loss << "\n";
+    results_file << "Final Test Accuracy: " << final_accuracy << "\n";
+
+    // Save final weights and biases (Do later, no print to print all)
+    /*results_file << "Weights1:\n";
+    for (const auto& row : params.weights1) {
+        for (const auto& val : row) {
+            results_file << val << " ";
+        }
+        results_file << "\n";
+    }
+    results_file << "Bias1:\n";
+    for (const auto& row : params.bias1) {
+        for (const auto& val : row) {
+            results_file << val << " ";
+        }
+        results_file << "\n";
+    }
+    results_file << "Weights2:\n";
+    for (const auto& row : params.weights2) {
+        for (const auto& val : row) {
+            results_file << val << " ";
+        }
+        results_file << "\n";
+    }
+    results_file << "Bias2:\n";
+    for (const auto& row : params.bias2) {
+        for (const auto& val : row) {
+            results_file << val << " ";
+        }
+        results_file << "\n";
+    }*/
+    results_file.close();
 }
 
 void run_and_save_training(int batch_size, int epochs,
                            vector<vector<double>>& trainImages, vector<int>& trainLabels,
                            vector<vector<double>>& testImages, vector<int>& testLabels,
                            int input_length, int neurons, int num_outputs,
-                           const vector<double>& chebyshev_coefficients, const vector<double>& chebyshev_derivative_coefficients,
+                           const vector<double>& chebyshev_relu_coefficients, const vector<double>& chebyshev_sigmoid_coefficients,
                            double chebyshev_a, double chebyshev_b,
-                           double learning_rate = 0.001) {
-    cout << "File opened" << endl;
-    ofstream results_file("training_results.txt");
-    cout << "Current working directory: " << fs::current_path() << endl;
-    if(results_file.is_open())
+                           double learning_rate = 0.001,
+                           int num_networks = 10) {
     {
-        results_file << "Training Results:\n";
+        lock_guard<mutex> guard(console_mutex);
+        cout << "File opened" << endl;
+        cout << "Current working directory: " << fs::current_path() << endl;
     }
-    else
-    {
-        cerr << "Unable to open file for writing\n";
+
+    vector<thread> threads;
+    for (int n = 0; n < num_networks; ++n) {
+        threads.emplace_back(train_and_save, n, batch_size, epochs, ref(trainImages), ref(trainLabels),
+                             ref(testImages), ref(testLabels), input_length, neurons, num_outputs,
+                             ref(chebyshev_relu_coefficients), ref(chebyshev_sigmoid_coefficients),
+                             chebyshev_a, chebyshev_b, learning_rate, num_networks);
     }
-    cout << "Clock starting" << endl;
-    auto start_time = high_resolution_clock::now();
-    // Initialize weights and biases for hidden layer
-    vector<vector<double>> weights1 = generateRandomMatrix(input_length, neurons, 0.0, 1.0);
-    vector<vector<double>> bias1 = generateZeroMatrix(1, neurons);
 
-    // Initialize weights and biases for output layer
-    vector<vector<double>> weights2 = generateRandomMatrix(neurons, num_outputs, 0.0, 1.0);
-    vector<vector<double>> bias2 = generateZeroMatrix(1, num_outputs);
-
-    // Train the network
-    vector<vector<double>> result = train(batch_size, epochs, trainImages, trainLabels, testImages, testLabels, input_length, neurons, num_outputs, chebyshev_coefficients, chebyshev_derivative_coefficients, chebyshev_a, chebyshev_b, learning_rate);
-
-    auto end_time = high_resolution_clock::now();
-    auto duration = duration_cast<seconds>(end_time - start_time).count();
-
-    // Save the results to a file
-    if (results_file.is_open()) {
-        results_file << "Training Time: " << duration << " seconds\n";
-        results_file << "Epochs: " << epochs << "\n";
-        results_file << "Batch Size: " << batch_size << "\n";
-        results_file << "Learning Rate: " << learning_rate << "\n";
-        // Save final weights and biases
-        results_file << "Weights1:\n";
-        for (const auto& row : weights1) {
-            for (const auto& val : row) {
-                results_file << val << " ";
-            }
-            results_file << "\n";
-        }
-        results_file << "Bias1:\n";
-        for (const auto& row : bias1) {
-            for (const auto& val : row) {
-                results_file << val << " ";
-            }
-            results_file << "\n";
-        }
-        results_file << "Weights2:\n";
-        for (const auto& row : weights2) {
-            for (const auto& val : row) {
-                results_file << val << " ";
-            }
-            results_file << "\n";
-        }
-        results_file << "Bias2:\n";
-        for (const auto& row : bias2) {
-            for (const auto& val : row) {
-                results_file << val << " ";
-            }
-            results_file << "\n";
-        }
-        results_file << "Accuracy: " << calculate_accuracy(result, testLabels) << "\n";
-        results_file.close();
-    } else {
-        cerr << "Unable to open file for writing\n";
+    for (auto& th : threads) {
+        th.join();
     }
 }
+
 
 int main() {
     int neurons = 512;
     int input_length = 784;
     int batch_size = 32;
-    int epochs = 5;
+    int epochs = 15;
     const int degree = 10;
     const double chebyshev_a = -60.0;
     const double chebyshev_b = 60.0;
     const int num_outputs = 10;
+    const int num_networks = 10;
+    const double learning_rate = 0.001;
 
-    // Generate Chebyshev coefficients
-    vector<double> chebyshev_coefficients = generate_chebyshev_coefficients_sigmoid(degree, chebyshev_a, chebyshev_b);
-    vector<double> chebyshev_derivative_coefficients = generate_chebyshev_coefficients_sigmoid_derivative(degree, chebyshev_a, chebyshev_b);
+    // Generate ReLU Chebyshev coefficients
+    vector<double> chebyshev_relu_coefficients = generate_chebyshev_coefficients_relu(degree, chebyshev_a, chebyshev_b);
 
-    cout << "Variables initialized" << endl;
+    // Generate Sigmoid Chebyshev coefficients
+    vector<double> chebyshev_sigmoid_coefficients = generate_chebyshev_coefficients_sigmoid(degree, chebyshev_a, chebyshev_b);
+
+    {
+        lock_guard<mutex> guard(console_mutex);
+        cout << "Variables initialized" << endl;
+    }
 
     // Load MNIST data
     string trainImagesPath = "/Users/Smaran/CLionProjects/FinalProjectFeedForwardNeuralNetwork/MNIST/train-images-idx3-ubyte/train-images-idx3-ubyte";
@@ -342,24 +390,12 @@ int main() {
         exit(1);
     }
 
-    cout << "MNIST data loaded" << endl;
-
-
-    run_and_save_training(batch_size, epochs, trainImages, trainLabels, testImages, testLabels, input_length, neurons, num_outputs, chebyshev_coefficients, chebyshev_derivative_coefficients, chebyshev_a, chebyshev_b);
-    return 0;
-}
-
-vector<vector<double>> backward_relu(const vector<vector<double>>& dvalues, const vector<vector<double>>& inputs) {
-    vector<vector<double>> dinputs = dvalues; // Copy dvalues
-
-    // Zero gradient where input values were negative or zero
-    for (size_t i = 0; i < dinputs.size(); ++i) {
-        for (size_t j = 0; j < dinputs[0].size(); ++j) {
-            if (inputs[i][j] <= 0) {
-                dinputs[i][j] = 0;
-            }
-        }
+    {
+        lock_guard<mutex> guard(console_mutex);
+        cout << "MNIST data loaded" << endl;
     }
-    cout << "dInputs size relu: " << dinputs.size() << " x " << dinputs[0].size() << endl;
-    return dinputs;
+
+    run_and_save_training(batch_size, epochs, trainImages, trainLabels, testImages, testLabels, input_length, neurons, num_outputs, chebyshev_relu_coefficients, chebyshev_sigmoid_coefficients, chebyshev_a, chebyshev_b, learning_rate, num_networks);
+
+    return 0;
 }

@@ -18,7 +18,7 @@ vector<double> cross_entropy_loss_forward(const vector<vector<double>>& y_pred, 
 double calculate_mean_loss(const vector<double>& sample_losses);
 vector<vector<double>> sumMatrixColumns(const vector<vector<double>>& matrix);
 vector<double> generate_chebyshev_coefficients_sigmoid(int degree, double a, double b);
-vector<double> generate_chebyshev_coefficients_sigmoid_derivative(int degree, double a, double b);
+vector<double> generate_chebyshev_coefficients_relu(int degree, double a, double b);
 vector<vector<double>> chebyshev_sigmoid_approx(const vector<vector<double>>& inputs, const vector<double>& coefficients, double a, double b);
-vector<vector<double>> chebyshev_sigmoid_derivative_approx(const vector<vector<double>>& inputs, const vector<double>& coefficients, double a, double b);
+vector<vector<double>> apply_chebyshev_relu(const vector<vector<double>>& matrix, const vector<double>& coefficients, double a, double b);
 #endif // MATRIX_OPERATIONS_H
